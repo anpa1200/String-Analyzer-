@@ -1,132 +1,123 @@
 # String Analyzer 🕵️‍♂️
 
-[![Python Version](https://img.shields.io/badge/python-3.7%2B-blue.svg)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python Version](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
-A powerful Python script to extract and analyze printable strings from binaries. Ideal for **malware analysts**, **reverse engineers**, and **forensics investigators** to uncover hidden indicators and generate AI-assisted analysis prompts.
+A powerful Python tool to extract and analyze printable strings from binary files. Ideal for **malware analysts**, **reverse engineers**, and **forensics investigators** to uncover hidden indicators and generate AI-assisted analysis prompts.
 
 ---
 
 ## 🔍 Features
 
-This script provides a comprehensive suite of string extraction and analysis capabilities:
-
-- **String Extraction**: Parses a binary file byte by byte to pull out all printable ASCII sequences of a configurable minimum length (default 4 characters). This helps you quickly surface embedded URLs, commands, file paths, and other human-readable artifacts.
-- **Entropy Calculation**: Calculates Shannon entropy for both the entire file and individual strings. High entropy may indicate packed or encrypted data blobs, guiding further unpacking or decryption efforts.
-- **Regex-Based Pattern Detection**:
-  - **IPv4 & IPv6 Addresses**: Identifies potential IP indicators via strict regex, useful for mapping network-based indicators of compromise.
-  - **URLs & Domains**: Captures HTTP/HTTPS endpoints embedded in the binary for phishing or command-and-control communication analysis.
-  - **Email Addresses**: Finds credential or notification email references, often abused in social engineering or exfiltration tactics.
-  - **Windows Registry Keys**: Detects registry access patterns (`HKLM\`, `HKCU\`) to reveal persistence or configuration modifications.
-  - **System Paths & Filenames**: Matches common Windows system directories and executable extensions, uncovering potential file-dropping or auto-start locations.
-- **Command Identification**:
-  - **Windows API Calls**: Recognizes a curated list of 300+ Win32 API functions, indicating possible dynamic loading or function invocation patterns.
-  - **CMD Commands**: Filters built-in Windows shell commands (e.g., `dir`, `copy`, `net user`) to detect batch-like activity or script snippets.
-  - **PowerShell Cmdlets**: Flags PowerShell-specific commands (e.g., `Get-Process`, `Invoke-Command`) often used in modern attacks or post-exploitation scripts.
-- **Obfuscation Pattern Matching**: Uses regex to detect bracketed, dotted, or substituted obfuscated IPs and URLs (e.g., `h[.]xxp[:]//`, `dot` notations), exposing attempts to evade simple string-based detection.
-- **Automated Decoding**:
-  - **Base64 Decoding**: Automatically decodes long, valid Base64 candidates into readable strings, revealing embedded configuration or secondary payloads.
-  - **Hex Decoding**: Converts hex-encoded sequences back to ASCII, unmasking hidden or encoded strings.
-- **Suspicious Keyword Flagging**: Cross-references extracted strings against a list of 300+ malware-related keywords (`ransomware`, `backdoor`, `exploit`) to prioritize high-risk indicators.
-- **AI Analysis Prompt Generation**: Formats filtered findings into a structured markdown prompt, ready to feed into an AI model for deeper behavioral analysis or report drafting. It includes entropy, categories, and actual items for context.
-- **Dual Mode Output**:
-  - **Unfiltered Mode**: Dumps all extracted strings into a plain text file for manual triage.
-  - **Filtered Mode**: Saves only categorized and relevant strings, reducing noise and focusing on actionable intelligence.
+- **String extraction**: Printable ASCII sequences with configurable minimum length (default 4) and optional max read size for large files.
+- **Entropy**: Shannon entropy for the whole file; high entropy can indicate packed or encrypted data.
+- **Pattern detection**:
+  - IPv4 & IPv6, URLs, emails, Windows registry keys, system paths, DLLs, filenames.
+  - 300+ Windows API names, CMD and PowerShell commands.
+  - Obfuscation patterns (e.g. `h[.]xxp`, dotted IPs).
+- **Decoding**: Base64 and hex decoding of candidate strings.
+- **Suspicious keywords**: Malware-related terms and .NET namespaces.
+- **Output**: Unfiltered string dump, categorized report, or an AI-ready markdown prompt.
+- **CLI & API**: Full CLI with options and a programmatic `analyze_file()` API; no global state.
 
 ---
 
 ## 📦 Installation
 
 ```bash
-# Download the script
-curl -O https://raw.githubusercontent.com/anpa1200/String-Analyzer-/main/string_analyser.py
-
-# (Optional) Clone the repository for examples and LICENSE
 git clone https://github.com/anpa1200/String-Analyzer-.git && cd String-Analyzer-
-
-# Create and activate virtual environment (recommended)
 python3 -m venv venv
-source venv/bin/activate
-
-# No external dependencies required (uses only Python stdlib) (uses only Python stdlib)
+source venv/bin/activate   # or: venv\Scripts\activate on Windows
+pip install -e .
 ```
+
+No external runtime dependencies (Python stdlib only). For development: `pip install -e ".[dev]"` (adds pytest and ruff).
 
 ---
 
 ## 🚀 Usage
 
+### Command line
+
+After `pip install -e .` you get the `string-analyzer` command. Or run from the project root: `python -m string_analyzer`.
+
+```bash
+# Filtered report (default)
+string-analyzer /path/to/binary.bin -o report.txt
+
+# Unfiltered: all extracted strings
+string-analyzer /path/to/binary.bin --unfiltered -o strings.txt
+
+# AI prompt
+string-analyzer /path/to/binary.bin --ai-prompt -o prompt.md
+
+# Options: --min-length 6, --max-bytes 10000000, --quiet, --verbose
+string-analyzer --help
+```
+
+### Interactive (legacy)
+
 ```bash
 python3 string_analyser.py
+# Then enter file path and follow prompts (unfiltered / filtered / AI prompt).
 ```
 
-1. **Enter path** to the binary when prompted.
-2. **Choose mode**:
-   - **Unfiltered**: Dump all extracted strings to file.
-   - **Filtered**: Group strings by category and save.
-3. **AI Prompt**: Optionally generate an AI-ready analysis prompt.
-4. **Output**: Strings and reports saved in `<basename>_strings.txt` or custom filename.
+### Programmatic API
+
+```python
+from string_analyzer import analyze_file, extract_strings, detect_patterns
+
+result = analyze_file("sample.bin")
+print(result["entropy"], result["obfuscated"])
+print(result["patterns"]["URLS"])
+
+# Or step by step:
+strings = extract_strings("sample.bin", min_length=4)
+patterns = detect_patterns(strings)  # Fresh dict every time
+```
 
 ---
 
-## 📖 Function Overview
+## 📖 Function overview
 
-| Function                     | Description                                                  |
-| ---------------------------- | ------------------------------------------------------------ |
-| `extract_strings(file, min_length)` | Extracts unique printable strings ≥ `min_length`.         |
-| `compute_file_entropy(file)` | Computes Shannon entropy over full file bytes.               |
-| `shannon_entropy(s)`         | Calculates Shannon entropy for a given string.               |
-| `detect_patterns(strings)`   | Categorizes strings into APIs, URLs, IPs, registry keys, etc. |
-| `try_base64_decode(s)`       | Attempts Base64 decode if candidate string matches pattern.  |
-| `try_hex_decode(s)`          | Attempts hex decode if candidate string matches pattern.     |
-| `generate_normal_output(...)`| Creates filtered report grouped by type.                     |
-| `generate_ai_prompt(...)`    | Builds AI analysis prompt with categorized strings.          |
+| Function | Description |
+|----------|--------------|
+| `extract_strings(path, min_length=4, max_bytes=None)` | Extract unique printable strings. |
+| `compute_file_entropy(path)` | Shannon entropy over file bytes. |
+| `shannon_entropy(s)` | Shannon entropy of a string. |
+| `detect_patterns(strings)` | Returns a new dict of categories → sets (no global state). |
+| `is_mostly_printable(s, threshold=0.9)` | Whether string is mostly printable ASCII. |
+| `try_base64_decode(s)` / `try_hex_decode(s)` | Decode candidates; return decoded string or `None`. |
+| `generate_normal_output(...)` / `generate_ai_prompt(...)` | Formatted report or AI prompt text. |
+| `analyze_file(path, ...)` | Full analysis: entropy, strings, patterns, obfuscated flag. |
 
 ---
 
-## 🛠️ Example Workflow
+## 🛠️ Example
 
 ```bash
-$ python3 string_analyser.py
-Path to file: samples/malware.bin
-Output all extracted strings (unfiltered)? (yes/no): no
-Create AI prompt for filtered output? (yes/no): yes
-Output file (default: malware_strings.txt): mal_prompt.txt
-AI prompt saved in mal_prompt.txt!
-```
-
-Contents of **mal_prompt.txt**:
-```
-File Entropy: 7.45
-
-### WINDOWS API COMMANDS:
-- CreateFile
-- ReadFile
-- WriteFile
-
-### URLS:
-- http://evil.example.com/payload
-
-### IPS:
-- 192.168.1.100
-
-... etc.
+$ string-analyzer sample.bin --ai-prompt -o mal_prompt.txt
+AI prompt saved -> mal_prompt.txt
 ```
 
 ---
 
-## 🔗 No External Dependencies
+## 🧪 Tests and CI
 
-This script relies solely on the **Python standard library** (no additional packages required).
+```bash
+pytest tests/ -v
+```
 
----
-
-## 🤝 Contributing
-
-Contributions, issues, and feature requests are welcome! Please fork the repository and submit a pull request.
+CI runs on push/PR: Ruff lint and pytest on Python 3.8, 3.10, 3.12.
 
 ---
 
 ## 📜 License
 
-Distributed under the **MIT License**. See [LICENSE](LICENSE) for details.
+Distributed under the **GNU General Public License v3.0**. See [LICENSE](LICENSE) for details.
 
+---
+
+## 🤝 Contributing
+
+Contributions, issues, and feature requests are welcome. Please open an issue or submit a pull request.
