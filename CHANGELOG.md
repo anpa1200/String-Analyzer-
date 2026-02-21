@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Single entry point**: Removed `string_analyser.py`. Use only `string-analyzer` or `python -m string_analyzer`. Interactive mode is built in: run with no arguments or use `--interactive` / `-i`.
+- **CLI robustness**: File validation (exists, is file, readable), clearer errors for permission and I/O failures, graceful handling of Ctrl+C and broken pipe.
+
 ## [2.0.0] - 2025-02-20
 
 ### Added
@@ -27,7 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Pattern data**: Centralized in `string_analyzer/patterns.py` (single source of truth).
-- **Backward compatibility**: `string_analyser.py` remains a launcher; with no arguments it runs interactive mode; with arguments it delegates to the new CLI.
+- **Backward compatibility** (superseded in Unreleased): Previously `string_analyser.py` remained as a launcher; now consolidated into the single CLI.
 
 ## [1.x] - Original single-script version
 

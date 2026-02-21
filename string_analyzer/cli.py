@@ -1,5 +1,6 @@
 """
 Command-line interface for String Analyzer.
+Single entry point: CLI with optional interactive mode.
 """
 
 import argparse
@@ -9,7 +10,6 @@ from pathlib import Path
 
 from string_analyzer import __version__
 from string_analyzer.analyzer import (
-    analyze_file,
     compute_file_entropy,
     detect_patterns,
     extract_strings,
@@ -17,8 +17,12 @@ from string_analyzer.analyzer import (
     generate_normal_output,
     is_likely_obfuscated,
 )
+from string_analyzer.patterns import ENTROPY_THRESHOLD, MIN_USEFUL_COUNT
 
 logger = logging.getLogger("string_analyzer")
+
+# Max bytes to read by default in interactive mode (safety)
+INTERACTIVE_MAX_BYTES = 50_000_000
 
 
 def _positive_int(value: str) -> int:
@@ -31,13 +35,15 @@ def _positive_int(value: str) -> int:
 def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Extract and analyze printable strings from binary files. "
-        "Ideal for malware analysis and forensics.",
+        "Ideal for malware analysis and forensics. Run with no arguments for interactive mode.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
         "file",
         type=Path,
-        help="Path to the binary file to analyze",
+        nargs="?",
+        default=None,
+        help="Path to the binary file to analyze (omit for interactive mode)",
     )
     parser.add_argument(
         "-o",
@@ -90,6 +96,12 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         help="Verbose logging",
     )
     parser.add_argument(
+        "-i",
+        "--interactive",
+        action="store_true",
+        help="Run in interactive mode (prompt for file and options)",
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version=f"%(prog)s {__version__}",
@@ -101,6 +113,93 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     return parsed
 
 
+def _run_interactive() -> int:
+    """Interactive mode: prompt for file path and output type."""
+    print("String Analyzer — interactive mode")
+    print("----------------------------------")
+    try:
+        raw = input("Path to file: ").strip()
+        if not raw:
+            print("No path given. Exiting.")
+            return 0
+        path = Path(raw).expanduser().resolve()
+        if not path.exists():
+            print(f"Error: File not found: {path}")
+            return 1
+        if not path.is_file():
+            print(f"Error: Not a file: {path}")
+            return 1
+    except (KeyboardInterrupt, EOFError):
+        print("\nAborted.")
+        return 130
+
+    try:
+        file_entropy = compute_file_entropy(path)
+        strings = extract_strings(path, min_length=4, max_bytes=INTERACTIVE_MAX_BYTES)
+    except PermissionError:
+        print(f"Error: Permission denied reading {path}")
+        return 1
+    except OSError as e:
+        print(f"Error: {e}")
+        return 1
+
+    default_out = path.with_name(f"{path.stem}_strings.txt")
+    choice = input("Output all extracted strings (unfiltered)? [y/N]: ").strip().lower()
+    if choice in ("y", "yes"):
+        out_raw = input(f"Output file [{default_out}]: ").strip() or str(default_out)
+        out_path = Path(out_raw).expanduser().resolve()
+        try:
+            with open(out_path, "w", encoding="utf-8") as f:
+                for s in sorted(strings):
+                    f.write(s + "\n")
+            print(f"Saved {len(strings)} strings -> {out_path}")
+        except OSError as e:
+            print(f"Error writing output: {e}")
+            return 1
+        return 0
+
+    found = detect_patterns(strings)
+    useful = (
+        len(found["WINDOWS_API_COMMANDS"])
+        + len(found["DLLS"])
+        + len(found["CMD_COMMANDS"])
+        + len(found["POWERSHELL_COMMANDS"])
+    )
+    obfuscated = useful < MIN_USEFUL_COUNT and file_entropy > ENTROPY_THRESHOLD
+    choice = input("Generate AI prompt (otherwise filtered report)? [y/N]: ").strip().lower()
+    do_ai = choice in ("y", "yes")
+    out_raw = input(f"Output file [{default_out}]: ").strip() or str(default_out)
+    out_path = Path(out_raw).expanduser().resolve()
+    text = (
+        generate_ai_prompt(found, file_entropy, obfuscated)
+        if do_ai
+        else generate_normal_output(found, file_entropy, obfuscated)
+    )
+    try:
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(text)
+        print(f"Saved -> {out_path}")
+    except OSError as e:
+        print(f"Error writing output: {e}")
+        return 1
+    return 0
+
+
+def _validate_file(path: Path) -> str | None:
+    """Return error message if path is invalid, else None."""
+    try:
+        if not path.exists():
+            return f"File not found: {path}"
+        if not path.is_file():
+            return f"Not a file: {path}"
+        path.read_bytes()  # ensure readable
+    except PermissionError:
+        return f"Permission denied: {path}"
+    except OSError as e:
+        return str(e)
+    return None
+
+
 def main(args: list[str] | None = None) -> int:
     ns = parse_args(args)
     logging.basicConfig(
@@ -108,12 +207,14 @@ def main(args: list[str] | None = None) -> int:
         format="%(levelname)s: %(message)s",
     )
 
-    path = ns.file
-    if not path.exists():
-        logger.error("File not found: %s", path)
-        return 1
-    if not path.is_file():
-        logger.error("Not a file: %s", path)
+    # Interactive: no file or explicit --interactive
+    if ns.file is None or ns.interactive:
+        return _run_interactive()
+
+    path = ns.file.expanduser().resolve()
+    err = _validate_file(path)
+    if err:
+        logger.error("%s", err)
         return 1
 
     try:
@@ -133,11 +234,17 @@ def main(args: list[str] | None = None) -> int:
     out_path = ns.output
     if out_path is None:
         out_path = path.with_name(f"{path.stem}_strings.txt")
+    else:
+        out_path = out_path.expanduser().resolve()
 
     if ns.unfiltered:
-        with open(out_path, "w", encoding="utf-8") as f:
-            for s in sorted(strings):
-                f.write(s + "\n")
+        try:
+            with open(out_path, "w", encoding="utf-8") as f:
+                for s in sorted(strings):
+                    f.write(s + "\n")
+        except OSError as e:
+            logger.error("Cannot write output: %s", e)
+            return 1
         if not ns.quiet:
             print(f"Extracted {len(strings)} strings -> {out_path}")
         return 0
@@ -150,8 +257,12 @@ def main(args: list[str] | None = None) -> int:
     else:
         text = generate_normal_output(found, file_entropy, obfuscated)
 
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write(text)
+    try:
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(text)
+    except OSError as e:
+        logger.error("Cannot write output: %s", e)
+        return 1
     if not ns.quiet:
         mode = "AI prompt" if ns.ai_prompt else "Filtered results"
         print(f"{mode} saved -> {out_path}")
@@ -159,7 +270,13 @@ def main(args: list[str] | None = None) -> int:
 
 
 def run() -> None:
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        print("\nAborted.", file=sys.stderr)
+        sys.exit(130)
+    except BrokenPipeError:
+        sys.exit(0)
 
 
 if __name__ == "__main__":

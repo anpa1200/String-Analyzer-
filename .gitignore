@@ -4,6 +4,8 @@ __pycache__/
 *$py.class
 *.so
 .Python
+
+# Build / distribution
 build/
 develop-eggs/
 dist/
@@ -17,8 +19,8 @@ sdist/
 var/
 wheels/
 *.egg-info/
-.installed.cfg
 *.egg
+.installed.cfg
 
 # Virtual environments
 venv/
@@ -32,22 +34,51 @@ env/
 *.swp
 *.swo
 *~
+.cursor/
 
 # Testing / coverage
 .pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
 .tox/
 .nox/
+coverage.xml
+*.cover
 
-# Ruff
+# Linting / formatting
 .ruff_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
 
 # OS
 .DS_Store
 Thumbs.db
+*.lnk
 
-# Project-specific
-*.strings.txt
+# Project-specific: analysis inputs and outputs
 samples/
+malware_samples/
 *.bin
+*.strings.txt
+*_strings.txt
+*_report.txt
+*_prompt.md
+out/
+output/
+reports/
+
+# Context / local config (do not commit)
+.context/
+context/
+*.local
+.env
+.env.*
+!.env.example
+
+# Logs and temp
+*.log
+*.tmp
+*.temp
+.cache/
