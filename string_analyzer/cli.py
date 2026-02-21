@@ -96,6 +96,22 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         help="Verbose logging",
     )
     parser.add_argument(
+        "--encoding",
+        choices=["ascii", "utf16", "both"],
+        default="both",
+        help="String encoding to extract: ascii, utf16, or both (default: both, most sensitive)",
+    )
+    parser.add_argument(
+        "--sensitive",
+        action="store_true",
+        help="Use lower thresholds for obfuscation detection; more suspicious keywords",
+    )
+    parser.add_argument(
+        "--no-embedded",
+        action="store_true",
+        help="Do not extract URLs/IPs/emails from inside long strings",
+    )
+    parser.add_argument(
         "-i",
         "--interactive",
         action="store_true",
@@ -134,8 +150,19 @@ def _run_interactive() -> int:
         return 130
 
     try:
-        file_entropy = compute_file_entropy(path)
-        strings = extract_strings(path, min_length=4, max_bytes=INTERACTIVE_MAX_BYTES)
+        file_size = path.stat().st_size
+        if file_size > INTERACTIVE_MAX_BYTES:
+            print(f"Warning: file is {file_size / (1 << 20):.1f} MB; only first {INTERACTIVE_MAX_BYTES / (1 << 20):.0f} MB will be read.")
+    except OSError:
+        pass
+    try:
+        file_entropy = compute_file_entropy(path, max_bytes=INTERACTIVE_MAX_BYTES)
+        strings = extract_strings(
+            path,
+            min_length=4,
+            max_bytes=INTERACTIVE_MAX_BYTES,
+            encoding="both",
+        )
     except PermissionError:
         print(f"Error: Permission denied reading {path}")
         return 1
@@ -158,14 +185,8 @@ def _run_interactive() -> int:
             return 1
         return 0
 
-    found = detect_patterns(strings)
-    useful = (
-        len(found["WINDOWS_API_COMMANDS"])
-        + len(found["DLLS"])
-        + len(found["CMD_COMMANDS"])
-        + len(found["POWERSHELL_COMMANDS"])
-    )
-    obfuscated = useful < MIN_USEFUL_COUNT and file_entropy > ENTROPY_THRESHOLD
+    found = detect_patterns(strings, extract_embedded=True)
+    obfuscated = is_likely_obfuscated(found, file_entropy, sensitive=True)
     choice = input("Generate AI prompt (otherwise filtered report)? [y/N]: ").strip().lower()
     do_ai = choice in ("y", "yes")
     out_raw = input(f"Output file [{default_out}]: ").strip() or str(default_out)
@@ -218,11 +239,12 @@ def main(args: list[str] | None = None) -> int:
         return 1
 
     try:
-        file_entropy = compute_file_entropy(path)
+        file_entropy = compute_file_entropy(path, max_bytes=ns.max_bytes)
         strings = extract_strings(
             path,
             min_length=ns.min_length,
             max_bytes=ns.max_bytes,
+            encoding=ns.encoding,
         )
     except PermissionError as e:
         logger.error("Permission denied: %s", e)
@@ -249,8 +271,8 @@ def main(args: list[str] | None = None) -> int:
             print(f"Extracted {len(strings)} strings -> {out_path}")
         return 0
 
-    found = detect_patterns(strings)
-    obfuscated = is_likely_obfuscated(found, file_entropy)
+    found = detect_patterns(strings, extract_embedded=not ns.no_embedded)
+    obfuscated = is_likely_obfuscated(found, file_entropy, sensitive=ns.sensitive)
 
     if ns.ai_prompt:
         text = generate_ai_prompt(found, file_entropy, obfuscated)

@@ -79,6 +79,31 @@ def test_extract_strings_max_bytes() -> None:
         path.unlink()
 
 
+def test_extract_strings_utf16() -> None:
+    # "Hello" in UTF-16LE: H e l l o with null bytes
+    utf16_data = b"H\x00e\x00l\x00l\x00o\x00\x00\x00"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".bin") as f:
+        f.write(utf16_data)
+        path = Path(f.name)
+    try:
+        out_ascii = extract_strings(path, min_length=2, encoding="ascii")
+        out_utf16 = extract_strings(path, min_length=2, encoding="utf16")
+        out_both = extract_strings(path, min_length=2, encoding="both")
+        assert "Hello" in out_utf16
+        assert "Hello" in out_both
+        assert out_ascii != out_utf16 or "Hello" in out_ascii
+    finally:
+        path.unlink()
+
+
+def test_detect_patterns_embedded_and_mac() -> None:
+    found = detect_patterns(["text with http://embedded.url.com inside and 192.168.1.1"])
+    assert "http://embedded.url.com" in found["URLS"]
+    assert "192.168.1.1" in found["IPS"]
+    found_mac = detect_patterns(["MAC: 00:1A:2B:3C:4D:5E"])
+    assert "00:1A:2B:3C:4D:5E" in found_mac["MAC_ADDRESSES"]
+
+
 def test_is_mostly_printable() -> None:
     assert is_mostly_printable("abc") is True
     assert is_mostly_printable("") is False

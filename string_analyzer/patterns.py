@@ -9,6 +9,9 @@ from typing import Dict, FrozenSet, List, Pattern
 # --- Configuration ---
 MIN_USEFUL_COUNT = 10
 ENTROPY_THRESHOLD = 5.0
+# Sensitive mode: lower bar for obfuscation flag, more substring matching
+MIN_USEFUL_COUNT_SENSITIVE = 6
+ENTROPY_THRESHOLD_SENSITIVE = 4.5
 
 # --- Windows API (base + extra + shell/registry) — built once ---
 _WINDOWS_API_BASE = [
@@ -150,8 +153,16 @@ _SUSPICIOUS_EXTRA = [
     "bypass", "malicious payload", "cyberattack", "cybercrime", "intruder", "intrusion detection",
     "exploit vulnerability", "system hijack", "malicious script",
 ]
+_SUSPICIOUS_SENSITIVE = [
+    "miner", "mining", "bitcoin", "crypto", "wallet", "monero", "xmr", "eth", "blockchain",
+    "clipboard", "browser", "chrome", "firefox", "edge", "steal", "persist", "persistence",
+    "inject", "hook", "keylog", "screenshot", "camera", "microphone", "log", "exfil",
+    "mutex", "mutexa", "runkey", "startup", "scheduled task", "task scheduler", "wmi",
+    "amsi", "etw", "bypass av", "antivirus", "defender", "evasion", "sandbox", "vmware",
+    "virtualbox", "vbox", "debugger", "analysis", "sample", "hash", "checksum",
+]
 SUSPICIOUS_KEYWORDS: FrozenSet[str] = frozenset(
-    (kw.lower() for kw in _SUSPICIOUS_BASE + _SUSPICIOUS_EXTRA)
+    (kw.lower() for kw in _SUSPICIOUS_BASE + _SUSPICIOUS_EXTRA + _SUSPICIOUS_SENSITIVE)
 )
 
 SUSPICIOUS_DOTNET_KEYWORDS: List[str] = [
@@ -239,15 +250,31 @@ POWERSHELL_COMMAND_LIST: FrozenSet[str] = frozenset(ps.lower() for ps in [
 ])
 
 # --- Regex patterns ---
-IP_PATTERN: Pattern[str] = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
+# IPv4: valid octets 0-255 (strict)
+IP_PATTERN: Pattern[str] = re.compile(
+    r'\b(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}'
+    r'(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\b'
+)
 IPV6_PATTERN: Pattern[str] = re.compile(
     r'\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b'
 )
+# IPv6 abbreviated (sensitive)
+IPV6_ABBREV_PATTERN: Pattern[str] = re.compile(
+    r'\b(?:[0-9a-fA-F]{1,4}:){2,6}(?::[0-9a-fA-F]{1,4}){1,4}\b'
+)
+# URLs: http, https, ftp, file, ws, wss, and obfuscated schemes (hxxp, etc.)
 URL_PATTERN: Pattern[str] = re.compile(
-    r'http[s]?://(?:[a-zA-Z0-9]|[$-_@.&+]|[!*\\(\\),])+', re.IGNORECASE
+    r'\b(?:https?|ftp|file|ws|wss|tcp|udp)://(?:[a-zA-Z0-9]|[$\-_@.&+]|[!*\\(\\),]|%[0-9A-Fa-f]{2})+\b',
+    re.IGNORECASE,
+)
+# Obfuscated / alternate URL-like (catch hxxp, h++p, etc.)
+URL_OBFUSCATED_PATTERN: Pattern[str] = re.compile(
+    r'\b(?:h(?:xx|[+\-]{2}|rr|tt)tps?|ftxp?)[:\-]*//(?:[a-zA-Z0-9\[\]\(\)\.\-%])+(?::\d+)?(?:/[^\s]*)?\b',
+    re.IGNORECASE,
 )
 EMAIL_PATTERN: Pattern[str] = re.compile(
-    r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', re.IGNORECASE
+    r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}',
+    re.IGNORECASE,
 )
 REGISTRY_PATTERN: Pattern[str] = re.compile(
     r'\b(?:HKCU|HKLM|HKEY_LOCAL_MACHINE|HKEY_CLASSES_ROOT|HKEY_CURRENT_USER)\\[^\s]+\b',
@@ -255,11 +282,15 @@ REGISTRY_PATTERN: Pattern[str] = re.compile(
 )
 DLL_PATTERN: Pattern[str] = re.compile(r".+\.dll$", re.IGNORECASE)
 FILE_PATTERN: Pattern[str] = re.compile(
-    r'([^\\/:*?"<>|\r\n]+)\.(exe|bat|cmd|vbs|txt|log|ini|reg|msi|sys|inf|drv|com|cpl|scr|hlp|ico|lnk)$',
+    r'([^\\/:*?"<>|\r\n]+)\.(exe|bat|cmd|vbs|ps1|txt|log|ini|reg|msi|sys|inf|drv|com|cpl|scr|hlp|ico|lnk|dll|dat|tmp|config)$',
     re.IGNORECASE,
 )
 SYSTEM_PATH_PATTERN: Pattern[str] = re.compile(
     r'(?i)\b[a-z]:[\\/](?:Windows|WINNT|System32|SysWOW64|Program\s*Files(?:\s*\(x86\))?|ProgramData|WinSxS|Users|Public)(?:[\\/][^\\/:*?"<>|\r\n]*)*\b'
+)
+# MAC address (sensitive)
+MAC_PATTERN: Pattern[str] = re.compile(
+    r'\b(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b'
 )
 
 OBFUSCATED_PATTERNS: List[Pattern[str]] = [
@@ -276,6 +307,10 @@ OBFUSCATED_PATTERNS: List[Pattern[str]] = [
         r'\b(?:[a-zA-Z0-9._%+-]+)\s*(?:\[at\]|\(at\))\s*([a-zA-Z0-9.-]+)\s*(?:\[dot\]|\(dot\)|\sdot\s|\.)\s*([a-zA-Z]{2,})\b',
         re.IGNORECASE,
     ),
+    re.compile(r'\[dot\]|\(dot\)|\[\.\]', re.IGNORECASE),
+    re.compile(r'\[at\]|\(at\)', re.IGNORECASE),
+    re.compile(r'h[xt]{2}p', re.IGNORECASE),
+    re.compile(r'0x[0-9a-fA-F]{2}\s*,\s*0x[0-9a-fA-F]{2}\s*,\s*0x[0-9a-fA-F]{2}\s*,\s*0x[0-9a-fA-F]{2}'),
 ]
 
 BASE64_CANDIDATE_RE: Pattern[str] = re.compile(
@@ -296,6 +331,7 @@ PATTERN_CATEGORIES: List[str] = [
     "CMD_COMMANDS",
     "FILES",
     "SYSTEM_PATHS",
+    "MAC_ADDRESSES",
     "OBFUSCATED",
     "DECODED_BASE64",
     "DECODED_HEX",

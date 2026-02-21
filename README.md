@@ -34,13 +34,15 @@
 
 | Feature | Description |
 |--------|-------------|
-| **String extraction** | Printable ASCII sequences with configurable minimum length (default 4) and optional `max_bytes` cap for large files. |
-| **Entropy** | Shannon entropy over the whole file; high entropy can indicate packed or encrypted content. |
-| **Pattern detection** | IPv4/IPv6, URLs, emails, Windows registry keys, system paths, DLL names, filenames, 300+ Windows API names, CMD and PowerShell commands, obfuscation patterns (e.g. `h[.]xxp`, dotted IPs). |
-| **Decoding** | Base64 and hex decoding of candidate strings; decoded results appear in report categories. |
-| **Suspicious keywords** | Malware-related terms and .NET namespaces. |
-| **Output formats** | Unfiltered string dump, categorized (filtered) report, or an AI-ready markdown prompt. |
-| **CLI & API** | Full CLI; programmatic `analyze_file()` and fine-grained functions; no global state. |
+| **String extraction** | ASCII and UTF-16LE (Windows PE); configurable min length and `max_bytes`; chunked read for large files. |
+| **Entropy** | Shannon entropy (chunked when `max_bytes` set); high entropy suggests packed/encrypted content. |
+| **Pattern detection** | Strict IPv4 (0–255), IPv6 (full and abbreviated), URLs (http/https/ftp/file/ws/wss), obfuscated URLs (hxxp, etc.), emails, MAC addresses, registry keys, system paths, DLLs, 300+ Windows APIs, CMD/PowerShell, obfuscation patterns. |
+| **Embedded extraction** | URLs, IPs, emails, MACs found *inside* long strings (not only whole-line matches). |
+| **Decoding** | Base64 (standard and URL-safe) and hex; decoded candidates in report. |
+| **Suspicious keywords** | Extended set: malware, miner, steal, persist, evasion, etc., plus .NET namespaces. |
+| **Sensitive mode** | `--sensitive`: lower obfuscation thresholds and more keywords for stricter triage. |
+| **Output formats** | Unfiltered dump, categorized report, or AI-ready markdown prompt. |
+| **CLI & API** | Full CLI (`--encoding`, `--sensitive`, `--no-embedded`); programmatic `analyze_file()`; no global state. |
 
 ---
 
@@ -96,6 +98,9 @@ string-analyzer
 | `--unfiltered` | Output all extracted strings, one per line (no categories). |
 | `--filtered` | Output categorized report (default when not using `--unfiltered` or `--ai-prompt`). |
 | `--ai-prompt` | Generate markdown prompt for an AI assistant. |
+| `--encoding {ascii,utf16,both}` | Extract ASCII only, UTF-16LE only, or both (default: both). |
+| `--sensitive` | Lower obfuscation thresholds; more suspicious keywords. |
+| `--no-embedded` | Do not extract URLs/IPs/emails from inside long strings. |
 | `-i`, `--interactive` | Force interactive mode (prompt for file and options). |
 | `-q`, `--quiet` | Suppress non-error messages. |
 | `-v`, `--verbose` | Verbose logging. |
@@ -143,6 +148,7 @@ Strings are classified into the following categories (empty categories are omitt
 | `DECODED_HEX` | Strings that successfully decode from hex to printable text. |
 | `SUSPICIOUS_KEYWORDS` | Substrings associated with malware (e.g. key terms). |
 | `SUSPICIOUS_DOTNET` | .NET-related suspicious namespaces/keywords. |
+| `MAC_ADDRESSES` | MAC addresses (e.g. `00:1A:2B:3C:4D:5E`). |
 
 The tool also computes **file entropy**. Combined with a low count of “useful” patterns (APIs, DLLs, CMD/PowerShell), high entropy can indicate a **packed or obfuscated** binary; this is noted in the report and in the AI prompt.
 
@@ -173,12 +179,15 @@ from string_analyzer.analyzer import (
 ### One-shot analysis
 
 ```python
-result = analyze_file("/path/to/binary", min_length=4, max_bytes=None)
-# result["file"]   -> resolved path
-# result["entropy"] -> float
-# result["strings"] -> set of extracted strings
-# result["patterns"] -> dict[str, set[str]] (category -> set of strings)
-# result["obfuscated"] -> bool (heuristic: low useful patterns + high entropy)
+result = analyze_file(
+    "/path/to/binary",
+    min_length=4,
+    max_bytes=None,
+    encoding="both",        # "ascii", "utf16", or "both"
+    extract_embedded=True,  # find URLs/IPs inside long strings
+    sensitive=False,        # True: lower obfuscation thresholds
+)
+# result["file"], result["entropy"], result["strings"], result["patterns"], result["obfuscated"]
 ```
 
 ### Step-by-step
@@ -242,6 +251,12 @@ for s in r["patterns"].get("IPS", []):
 
 ```bash
 string-analyzer binary --min-length 8 -o long_strings.txt
+```
+
+**Maximum sensitivity (UTF-16 + embedded URLs + lower obfuscation bar):**
+
+```bash
+string-analyzer suspect.exe --encoding both --sensitive -o report.txt
 ```
 
 ---
