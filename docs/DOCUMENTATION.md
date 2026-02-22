@@ -8,8 +8,8 @@ This document provides extended reference for the String Analyzer tool: workflow
 
 ### Malware triage
 
-1. Run with `--ai-prompt` to get a markdown prompt containing categorized strings and entropy.
-2. Paste the prompt into an AI assistant or use it in your playbook to get a first-pass behavioral summary.
+1. Run with `--ai-prompt` to get a markdown prompt containing categorized strings and entropy, then paste into an AI assistant; or use `--analyze-with gemini` or `--analyze-with codex` to send the prompt directly to Gemini CLI or Codex and get the analysis in one step (requires the CLI on PATH).
+2. Save the AI response with `--ai-output report.md`.
 3. Optionally run with `--filtered` and `--verbose` to inspect categories (URLs, registry keys, APIs) manually.
 
 ### Reverse engineering
@@ -46,9 +46,10 @@ for path in Path("samples").glob("*.bin"):
 
 ### String extraction
 
-- Only **printable ASCII** (code points 32–126) is considered part of a string.
-- Consecutive printable bytes form one string; any other byte ends the current string and starts a new one.
-- **Minimum length** is configurable (default 4). Shorter minimums yield more noise; longer ones can miss short indicators (e.g. short URLs or IP segments in other strings).
+- **ASCII**: printable ASCII (code points 32–126); consecutive printable bytes form one string.
+- **UTF-16LE**: supported via `--encoding utf16` or `--encoding both` (default); common in Windows PE.
+- **Minimum length** is configurable (default 4). Use `--encoding ascii | utf16 | both` to control which encodings are extracted.
+- **Embedded extraction**: when enabled (default), URLs, IPs, emails, and MAC addresses are also found *inside* long strings (not only whole-line matches). Disable with `--no-embedded`.
 
 ### Categories and precedence
 
@@ -63,10 +64,10 @@ Patterns are evaluated in a fixed order; the first match wins. For example, a st
 
 A file is marked **obfuscated** (in report and AI prompt) when:
 
-- **Useful pattern count** (Windows API + DLLs + CMD + PowerShell) is below `MIN_USEFUL_COUNT` (default 10), and  
-- **File entropy** is above `ENTROPY_THRESHOLD` (default 5.0).
+- **Useful pattern count** (Windows API + DLLs + CMD + PowerShell) is below a threshold (default 10; 6 in sensitive mode), and  
+- **File entropy** is above a threshold (default 5.0; 4.5 in sensitive mode).
 
-This is a heuristic: packed or encrypted binaries often have high entropy and few readable API/command strings. Legitimate small utilities can also trigger it.
+Use `--sensitive` to lower both thresholds and flag more samples. This is a heuristic: packed or encrypted binaries often have high entropy and few readable API/command strings.
 
 ### Pattern data source
 
@@ -76,14 +77,17 @@ All pattern lists and regexes live in `string_analyzer/patterns.py` (single sour
 
 ## 3. API reference (summary)
 
-- **`analyze_file(filepath, min_length=4, max_bytes=None)`**  
+- **`analyze_file(filepath, min_length=4, max_bytes=None, encoding="both", extract_embedded=True, sensitive=False)`**  
   Returns a dict: `file`, `entropy`, `strings`, `patterns`, `obfuscated`. Raises `FileNotFoundError` or `ValueError` if the path is missing or not a file.
 
-- **`extract_strings(filepath, min_length=4, max_bytes=None)`**  
-  Returns a `set[str]` of unique strings. Does not raise for empty or unreadable files; use normal Python I/O handling if you need strict checks.
+- **`extract_strings(filepath, min_length=4, max_bytes=None, encoding="both")`**  
+  Returns a `set[str]` of unique strings. `encoding`: `"ascii"`, `"utf16"`, or `"both"`. Uses chunked read when `max_bytes` is set.
 
-- **`detect_patterns(strings)`**  
-  Accepts any iterable of strings. Returns a new dict; each key is a category name, each value is a set of strings. No global state; safe to call repeatedly.
+- **`compute_file_entropy(filepath, max_bytes=None)`**  
+  Shannon entropy over the file (or first `max_bytes`). Chunked read when `max_bytes` is set.
+
+- **`detect_patterns(strings, extract_embedded=True)`**  
+  Accepts any iterable of strings. Returns a new dict; each key is a category name, each value is a set of strings. When `extract_embedded` is True, also finds URLs, IPs, emails, MACs inside long strings.
 
 - **`generate_normal_output(found_patterns, file_entropy, obfuscated=False)`**  
   Returns a single string (filtered report). Same structure as the default CLI filtered output.
@@ -91,8 +95,8 @@ All pattern lists and regexes live in `string_analyzer/patterns.py` (single sour
 - **`generate_ai_prompt(found_patterns, file_entropy, obfuscated=False)`**  
   Returns a single string (markdown prompt for AI analysis).
 
-- **`is_likely_obfuscated(found_patterns, file_entropy)`**  
-  Uses `MIN_USEFUL_COUNT` and `ENTROPY_THRESHOLD` from `string_analyzer.patterns`.
+- **`is_likely_obfuscated(found_patterns, file_entropy, sensitive=False)`**  
+  Uses configurable thresholds from `string_analyzer.patterns` (sensitive mode uses lower thresholds).
 
 ---
 
@@ -101,6 +105,7 @@ All pattern lists and regexes live in `string_analyzer/patterns.py` (single sour
 - **Exit codes:** 0 = success, 1 = error (e.g. file not found, permission denied, write failure), 130 = interrupted (e.g. Ctrl+C).
 - **Paths:** File and output paths support `~` (home directory). The CLI resolves them before checking existence or writing.
 - **Interactive mode:** If no file argument is given (or `-i` is used), the program prompts for file path and output type. Input size is capped (e.g. 50 MB) in interactive mode to avoid accidental resource use.
+- **External AI (`--analyze-with gemini | codex`):** Builds the same categorized AI prompt, saves it to `-o`, and sends it to the chosen CLI via stdin. Requires `gemini`/`gemini-cli` or `codex` on PATH. Use `--ai-output PATH` to save the AI response. Timeout: 300 seconds.
 
 ---
 
@@ -108,11 +113,12 @@ All pattern lists and regexes live in `string_analyzer/patterns.py` (single sour
 
 | Issue | Suggestion |
 |-------|------------|
-| No strings or very few categories | Increase `--min-length` or check that the file actually contains printable ASCII (e.g. not fully packed/encrypted). |
+| No strings or very few categories | Try `--encoding both` (default) to include UTF-16LE; increase `--min-length` or check that the file contains printable data (e.g. not fully packed/encrypted). |
 | Tool is slow or uses a lot of memory | Use `--max-bytes` to limit how much of the file is read. |
 | “Permission denied” | Ensure the process can read the file and write to the output path. Run with appropriate user/permissions. |
-| Want different categories or thresholds | Edit `string_analyzer/patterns.py` (PATTERN_CATEGORIES, MIN_USEFUL_COUNT, ENTROPY_THRESHOLD, and the pattern lists/regexes). |
-| Need to process huge or remote files | Use the API with `max_bytes` and your own I/O (e.g. stream or partial read) if you need behavior not provided by the current file-based API. |
+| Want different categories or thresholds | Edit `string_analyzer/patterns.py` (PATTERN_CATEGORIES, MIN_USEFUL_COUNT, ENTROPY_THRESHOLD, and the pattern lists/regexes). Use `--sensitive` for lower obfuscation thresholds. |
+| Need to process huge or remote files | Use the API with `max_bytes` and your own I/O if needed. Extraction and entropy use chunked read when `max_bytes` is set. |
+| `--analyze-with` fails (gemini/codex not found) | Install [Gemini CLI](https://github.com/google-gemini/gemini-cli) or [Codex CLI](https://codex.com) and ensure the binary (`gemini`/`gemini-cli` or `codex`) is on your PATH. |
 
 ---
 

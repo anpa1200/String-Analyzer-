@@ -65,6 +65,8 @@ malware_samples/
 *_strings.txt
 *_report.txt
 *_prompt.md
+analysis.md
+prompt.txt
 out/
 output/
 reports/

@@ -5,6 +5,8 @@ Single entry point: CLI with optional interactive mode.
 
 import argparse
 import logging
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -18,6 +20,13 @@ from string_analyzer.analyzer import (
     is_likely_obfuscated,
 )
 from string_analyzer.patterns import ENTROPY_THRESHOLD, MIN_USEFUL_COUNT
+
+# Instruction sent to external AI (when using stdin + short prompt)
+EXTERNAL_AI_INSTRUCTION = (
+    "Analyze the above extracted strings from a binary file and provide: "
+    "1) Likely behavior and functionality 2) Key IOCs (URLs, IPs, paths) "
+    "3) Risk assessment and recommendations."
+)
 
 logger = logging.getLogger("string_analyzer")
 
@@ -110,6 +119,20 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         "--no-embedded",
         action="store_true",
         help="Do not extract URLs/IPs/emails from inside long strings",
+    )
+    parser.add_argument(
+        "--analyze-with",
+        choices=["gemini", "codex"],
+        default=None,
+        metavar="CLI",
+        help="Send categorized prompt to gemini-cli or codex-cli for AI analysis",
+    )
+    parser.add_argument(
+        "--ai-output",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Save AI response to this file (when using --analyze-with)",
     )
     parser.add_argument(
         "-i",
@@ -206,6 +229,90 @@ def _run_interactive() -> int:
     return 0
 
 
+def _run_external_ai(
+    prompt_text: str,
+    backend: str,
+    ai_output_path: Path | None,
+    quiet: bool,
+) -> int:
+    """
+    Run gemini-cli or codex-cli with prompt_text on stdin.
+    Returns 0 on success, non-zero on failure.
+    """
+    prompt_bytes = prompt_text.encode("utf-8")
+    if backend == "gemini":
+        # gemini-cli: stdin is context; positional prompt is the query (appended)
+        cmd = _gemini_cmd()
+        if cmd is None:
+            logger.error("gemini-cli not found. Install it (e.g. npm i -g @google/generative-ai-cli) and ensure 'gemini' or 'gemini-cli' is on PATH.")
+            return 1
+        try:
+            result = subprocess.run(
+                [cmd, EXTERNAL_AI_INSTRUCTION],
+                input=prompt_bytes,
+                capture_output=True,
+                timeout=300,
+            )
+            out = result.stdout.decode("utf-8", errors="replace")
+            err = result.stderr.decode("utf-8", errors="replace")
+        except subprocess.TimeoutExpired:
+            logger.error("gemini-cli timed out after 300s")
+            return 1
+        except FileNotFoundError:
+            logger.error("gemini-cli not found")
+            return 1
+        if result.returncode != 0 and err:
+            logger.error("gemini-cli stderr: %s", err.strip())
+        if ai_output_path:
+            try:
+                ai_output_path.write_text(out, encoding="utf-8")
+            except OSError as e:
+                logger.error("Cannot write AI output: %s", e)
+                return 1
+        if not quiet:
+            print(out)
+        return 0 if result.returncode == 0 else result.returncode
+
+    if backend == "codex":
+        # codex exec - : read instructions from stdin
+        if shutil.which("codex") is None:
+            logger.error("codex not found. Install Codex CLI and ensure 'codex' is on PATH.")
+            return 1
+        args = ["codex", "exec", "-"]
+        if ai_output_path:
+            args.extend(["-o", str(ai_output_path)])
+        try:
+            result = subprocess.run(
+                args,
+                stdin=subprocess.PIPE,
+                input=prompt_bytes,
+                capture_output=True,
+                timeout=300,
+            )
+            if ai_output_path and ai_output_path.exists():
+                out = ai_output_path.read_text(encoding="utf-8")
+            else:
+                out = result.stdout.decode("utf-8", errors="replace") if result.stdout else ""
+            if result.stderr:
+                logger.warning("codex stderr: %s", result.stderr.decode("utf-8", errors="replace").strip())
+            if not quiet and out:
+                print(out)
+        except subprocess.TimeoutExpired:
+            logger.error("codex exec timed out after 300s")
+            return 1
+        except FileNotFoundError:
+            logger.error("codex not found")
+            return 1
+        return 0 if result.returncode == 0 else result.returncode
+
+    return 1
+
+
+def _gemini_cmd() -> str | None:
+    """Return 'gemini' or 'gemini-cli' whichever is on PATH."""
+    return shutil.which("gemini") or shutil.which("gemini-cli")
+
+
 def _validate_file(path: Path) -> str | None:
     """Return error message if path is invalid, else None."""
     try:
@@ -273,6 +380,19 @@ def main(args: list[str] | None = None) -> int:
 
     found = detect_patterns(strings, extract_embedded=not ns.no_embedded)
     obfuscated = is_likely_obfuscated(found, file_entropy, sensitive=ns.sensitive)
+
+    if ns.analyze_with:
+        # Send categorized prompt to gemini-cli or codex-cli
+        prompt_text = generate_ai_prompt(found, file_entropy, obfuscated)
+        try:
+            with open(out_path, "w", encoding="utf-8") as f:
+                f.write(prompt_text)
+            if not ns.quiet:
+                print(f"Prompt saved -> {out_path}")
+        except OSError as e:
+            logger.error("Cannot write prompt: %s", e)
+        ai_out = ns.ai_output.expanduser().resolve() if ns.ai_output else None
+        return _run_external_ai(prompt_text, ns.analyze_with, ai_out, ns.quiet)
 
     if ns.ai_prompt:
         text = generate_ai_prompt(found, file_entropy, obfuscated)

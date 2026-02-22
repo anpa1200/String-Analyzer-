@@ -98,6 +98,8 @@ string-analyzer
 | `--unfiltered` | Output all extracted strings, one per line (no categories). |
 | `--filtered` | Output categorized report (default when not using `--unfiltered` or `--ai-prompt`). |
 | `--ai-prompt` | Generate markdown prompt for an AI assistant. |
+| `--analyze-with {gemini,codex}` | Send categorized prompt to **gemini-cli** or **codex-cli** and print the AI analysis. Saves the prompt to `-o`; use `--ai-output` to save the AI response. |
+| `--ai-output PATH` | Save the AI response to this file (when using `--analyze-with`). |
 | `--encoding {ascii,utf16,both}` | Extract ASCII only, UTF-16LE only, or both (default: both). |
 | `--sensitive` | Lower obfuscation thresholds; more suspicious keywords. |
 | `--no-embedded` | Do not extract URLs/IPs/emails from inside long strings. |
@@ -257,6 +259,13 @@ string-analyzer binary --min-length 8 -o long_strings.txt
 
 ```bash
 string-analyzer suspect.exe --encoding both --sensitive -o report.txt
+```
+
+**Send to Gemini or Codex for AI analysis (requires gemini-cli or codex on PATH):**
+
+```bash
+string-analyzer suspect.exe --analyze-with gemini -o prompt.txt --ai-output analysis.md
+string-analyzer suspect.exe --analyze-with codex --ai-output analysis.md
 ```
 
 ---
